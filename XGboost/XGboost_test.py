@@ -44,17 +44,41 @@ def get_train_val_test_data(df, train_pct=0.8, train_start_date=None, train_end_
 
     test_df = df[df['date'] > train_end_date]
     if test_start_date and test_end_date:
-        test_df = test_df[(test_df['date']>= test_start_date ) & (test_df['date'] <= test_end_date)]
-    print("[data verify], train, %s to %s" % (min(train_df.trade_date.values), max(train_df.trade_date.values)))
-    print("[data verify], val, %s to %s" % (min(val_df.trade_date.values), max(val_df.trade_date.values)))
-    print("[data verify], test, %s to %s" % (min(test_df.trade_date.values), max(test_df.trade_date.values)))
+        test_df = test_df[(test_df['date'] >= test_start_date) & (test_df['date'] <= test_end_date)]
+    print("[data verify], train, %s to %s" % (np.min(train_df.date.values), np.max(train_df.date.values)))
+    print("[data verify], val, %s to %s" % (np.min(val_df.date.values), np.max(val_df.date.values)))
+    print("[data verify], test, %s to %s" % (np.min(test_df.date.values), np.max(test_df.date.values)))
     return train_df, val_df, test_df
 
-def predict_factors(train_df, val_df, test_df, factor_names):
-    for tcount in range(len(factor_names)):
-        factor_name = factor_names[tcount]
-        print("predicting %s..." % factor_name)
-        boost_model = BoostModel()
+def format_feature_label(data_df, y_marker, factor_names):
+    '''
+
+    Parameters
+    ----------
+    data_df:原始输入数据
+    y_marker： ‘residual’截距column的名字
+    factor_names：除去residual之外的columns 名字
+
+    Returns
+    -------
+    feature：（type:np.array）
+    label_lists:
+
+    '''
+    df = data_df.copy()
+    if 'date' in df.columns:
+        del df['date']
+    if 'code' in df.columns:
+        del df['code']
+    end_tag_length = len(y_marker)
+    valid_feature_col = [x for x in df.columns if x[-end_tag_length:] != y_marker]
+    feature = np.array(df[valid_feature_col])
+
+    label_lists = []
+    for factor_name in factor_names:
+        label = np.array(df[y_marker])
+        label_lists.append(label)
+    return feature, label_lists
 
 
 
@@ -155,7 +179,47 @@ barra_residual_r.to_csv(r'F:\WorkplaceSzy\XGboost\residual.csv')
 
 #读取截距得到训练集，测试集
 
+boost_pane_array = np.append(np.array(b_s_frame.iloc[:11003,:]), np.array(barra_residual_r.iloc[:,1]).reshape(11003,1), axis=1)
+boost_panel = pd.DataFrame(boost_pane_array, columns=b_s_frame.columns.values.tolist() + ['residual'])
 
+train_df, val_df, test_df = get_train_val_test_data(boost_panel, train_pct=0.8, train_start_date='2010-03-01', train_end_date='2018-11-01', test_start_date='2018-12-03', test_end_date='2020-12-01')
+
+
+factor_names_list = boost_panel.columns[2:-1].values.tolist()
+def predict_factors(train_df_e, val_df_e, test_df_e, factor_names):
+    '''
+    输入参数：
+        train_df, val_df, test_df: 训练集、验证集、测试集数据
+    输出：
+        预测值df，columns为 trade_date, 因子真实值（这两项是取自test_df中），因子的预测值
+
+    '''
+    train_feature, train_labels = format_feature_label(train_df_e, "residual", factor_names)
+    val_feature, val_labels = format_feature_label(val_df_e, "residual", factor_names)
+    test_feature, test_labels = format_feature_label(test_df_e, "residual", factor_names)
+
+    test_date_values = list(test_df_e.date.values)
+    result_dict = {"date": test_date_values}
+    # xgboost模型训练，得到因子值输出
+    for fcount in range(len(factor_names)):
+        factor_name = factor_names[fcount]
+        print("predicting %s..." % factor_name)
+        boost_model = BoostModel()
+        train_start = time.time()
+        boost_model.fit(train_feature, train_labels[fcount], val_feature, val_labels[fcount])
+        train_stop = time.time()
+        print("train time cost:%s" % (train_stop - train_start))
+        predict_score = boost_model.predict(test_feature)
+        predict_stop = time.time()
+        print("predict time cost:%s" % (predict_stop - train_stop))
+        predict_score = list(predict_score)
+        result_dict[factor_name + "_predict"] = predict_score
+        fcount += 1
+    return pd.DataFrame(result_dict)
+
+
+boost_barra_result = predict_factors(train_df, val_df, test_df, factor_names_list)
+boost_barra_result.to_csv(r"F:\WorkplaceSzy\XGboost\boost_barra_result.csv")
 
 
 
